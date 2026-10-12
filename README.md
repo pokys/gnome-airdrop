@@ -30,7 +30,7 @@ The service runs separately from GNOME Shell. Disabling the extension does not
 stop a transfer; logging out or losing the active login session does.
 
 Choose **Doba příjmu** (Reception duration) before enabling reception: indefinitely,
-5 minutes or 10 minutes. The default is saved in the same settings file as the
+1, 2, 5 or 10 minutes. The default is saved in the same settings file as the
 name and folder. The service starts the countdown after startup. At expiry it
 rejects new transfers and lets previously accepted transfers finish, including
 the existing upload wait/read timeouts; then it restores Wi-Fi. The GNOME Shell

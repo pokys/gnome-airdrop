@@ -41,7 +41,7 @@ def report(status):
                     'state': known(status.get('state'), STATES, 'unknown'),
                     'receiving': status.get('receiving') is True,
                     'duration_seconds': window.get('duration_seconds') if type(window.get('duration_seconds')) is int
-                        and window['duration_seconds'] in (0, 300, 600) else None},
+                        and window['duration_seconds'] in (0, 60, 120, 300, 600) else None},
         'transfer': {'phase': known(transfer.get('phase'), PHASES, 'unknown'),
                      'error': known(transfer.get('error'), ERRORS),
                      'file_count': bounded_number(transfer.get('file_count'), 512),

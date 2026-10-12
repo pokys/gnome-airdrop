@@ -1,5 +1,12 @@
 # Changes
 
+## 0.2.1 — experimental
+
+- Add 1 and 2 minute receiving windows alongside 5/10 minutes and indefinite reception.
+- Keep the last completed or failed transfer visible when a new receiving session starts.
+- Warn when GNOME is still running a cached older extension after installation;
+  logging out and back in loads the installed version.
+
 ## 0.2.0 — experimental
 
 - Show transfer name/count, received archive bytes, average speed, verification

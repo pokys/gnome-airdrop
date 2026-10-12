@@ -6,7 +6,7 @@ import tempfile
 import unicodedata
 from session import read_json
 
-DURATIONS = (0, 300, 600)
+DURATIONS = (0, 60, 120, 300, 600)
 DEFAULT_NAME = 'GNOME-AirDrop'
 
 
@@ -44,7 +44,7 @@ def save_preferences(config, changes):
     if not valid_name(values['receiver_name']):
         raise ValueError('Jméno musí mít 1 až 63 znaků, bez lomítek a řídicích znaků.')
     if type(values['duration_seconds']) is not int or values['duration_seconds'] not in DURATIONS:
-        raise ValueError('Délka příjmu musí být do vypnutí, 5 nebo 10 minut.')
+        raise ValueError('Délka příjmu musí být do vypnutí, 1, 2, 5 nebo 10 minut.')
     folder = values['download_dir']
     if not isinstance(folder, str) or '\0' in folder:
         raise ValueError('Vyberte existující složku.')

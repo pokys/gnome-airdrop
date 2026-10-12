@@ -17,6 +17,15 @@ class TransferState:
         self.active = {}
         self.latest = {'phase': 'idle', 'active_transfers': 0}
         self.last_result = None
+        if self.path:
+            try:
+                with self.path.open() as stream:
+                    previous = json.loads(stream.read(65536))
+                result = previous.get('last_result')
+                if isinstance(result, dict) and result.get('phase') in ('completed', 'error'):
+                    self.last_result = result
+            except (OSError, ValueError, AttributeError):
+                pass
         self.destination = None
         self.activity_fd = None
         if self.path:
@@ -110,4 +119,4 @@ class TransferState:
 
     def idle(self):
         with self.lock:
-            self._save({'phase': 'idle'})
+            self._save(self.last_result or {'phase': 'idle'})

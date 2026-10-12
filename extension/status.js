@@ -42,7 +42,7 @@ export function transferText(transfer) {
 }
 
 export function durationLabel(seconds) {
-    return ({0: 'Do vypnutí', 300: '5 minut', 600: '10 minut'})[seconds] ?? 'Do vypnutí';
+    return ({0: 'Do vypnutí', 60: '1 minuta', 120: '2 minuty', 300: '5 minut', 600: '10 minut'})[seconds] ?? 'Do vypnutí';
 }
 
 export function windowText(session, now = Date.now() / 1000) {

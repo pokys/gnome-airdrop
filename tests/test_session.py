@@ -37,6 +37,18 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(snapshot['ends_at'], 5300)
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o644)
 
+    def test_last_result_survives_a_new_receiving_session(self):
+        with patch('time.monotonic', return_value=399): token = self.state.begin('file',1)
+        self.state.finish(token,'timeout')
+        restarted=TransferState(self.root/'runtime/transfer.json',self.path)
+        self.addCleanup(os.close,restarted.activity_fd)
+        restarted.idle()
+        result=session.read_json(self.root/'runtime/transfer.json')
+        self.assertEqual(result['phase'],'error')
+        self.assertEqual(result['last_result']['id'],token)
+        self.assertEqual(result['error'],'timeout')
+        self.assertEqual(result['active_transfers'],0)
+
     def test_indefinite_session_never_expires(self):
         session.prepare(dict(self.prefs, duration_seconds=0), self.path)
         session.ready(self.path)

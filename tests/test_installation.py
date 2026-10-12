@@ -66,6 +66,8 @@ elif name == 'runuser':
     def test_standalone_install_uses_user_downloads_and_fixed_backend(self):
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr+result.stdout)
+        self.assertIn('GNOME dosud nenacetl novy kod', result.stdout)
+        self.assertIn('odhlas a prihlas', result.stdout)
         config = json.loads((self.target/'config.json').read_text())
         self.assertEqual(config['interface'], 'testwifi')
         self.assertEqual(config['download_dir'], str(self.downloads))

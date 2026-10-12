@@ -83,7 +83,22 @@ echo 'Nainstalovano. Prijem je vypnuty a nebude se zapinat pri startu pocitace.'
 if runuser -u "$OWNER" -- env XDG_RUNTIME_DIR="/run/user/$OWNER_UID" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$OWNER_UID/bus" \
   gnome-extensions enable gnome-airdrop@pokys.github.io; then
-  echo 'Rozsireni je zapnute. V horni liste hledej ikonu AirDrop.'
+  EXPECTED_VERSION=$(python3 - "$PACKAGE/gnome-airdrop@pokys.github.io.shell-extension.zip" <<'PYMETA'
+import json, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    print(json.loads(archive.read('metadata.json'))['version'])
+PYMETA
+)
+  LOADED_VERSION=$(runuser -u "$OWNER" -- env LC_ALL=C XDG_RUNTIME_DIR="/run/user/$OWNER_UID" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$OWNER_UID/bus" \
+    gnome-extensions info gnome-airdrop@pokys.github.io 2>/dev/null | awk '$1 == "Version:" {print $2; exit}' || true)
+  if [[ $LOADED_VERSION == "$EXPECTED_VERSION" ]]; then
+    echo 'Rozsireni je zapnute. V horni liste hledej ikonu AirDrop.'
+  else
+    echo 'Soubory jsou nainstalovane, ale GNOME dosud nenacetl novy kod doplnku.'
+    echo 'Po ulozeni prace se odhlas a prihlas. Pouhe vypnuti/zapnuti doplnku nestaci.'
+    echo 'Pak spust: gnome-extensions enable gnome-airdrop@pokys.github.io'
+  fi
 else
   echo 'GNOME zatim nove rozsireni nenacetl. Po ulozeni prace se odhlas a prihlas.'
   echo 'Pak spust: gnome-extensions enable gnome-airdrop@pokys.github.io'

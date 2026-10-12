@@ -67,6 +67,12 @@ class DestinationTests(unittest.TestCase):
 class PreferencesTests(unittest.TestCase):
     setUp = DestinationTests.setUp
 
+    def test_short_reception_windows_are_saved(self):
+        settings.save_preferences(self.config, {'download_dir': str(self.folder)})
+        for seconds in (60, 120):
+            settings.save_preferences(self.config, {'duration_seconds': seconds})
+            self.assertEqual(settings.preferences(self.config)['duration_seconds'], seconds)
+
     def test_all_preferences_share_one_file_and_preserve_each_other(self):
         settings.save_preferences(self.config, {'download_dir': str(self.folder),
             'receiver_name': 'My Laptop', 'duration_seconds': 600})

@@ -39,7 +39,7 @@ export default class AirDropPreferences extends ExtensionPreferences {
             description: 'Změny se použijí při příštím zapnutí příjmu.'});
         const name = new Adw.EntryRow({title: 'Jméno na iPhonu'});
         const duration = new Adw.ComboRow({title: 'Výchozí délka příjmu',
-            model: Gtk.StringList.new(['Do vypnutí', '5 minut', '10 minut'])});
+            model: Gtk.StringList.new(['Do vypnutí', '1 minuta', '2 minuty', '5 minut', '10 minut'])});
         const folder = new Adw.ActionRow({title: 'Ukládat do', subtitle: 'Načítám…'});
         const choose = new Gtk.Button({label: 'Vybrat složku…', valign: Gtk.Align.CENTER});
         folder.add_suffix(choose);
@@ -66,7 +66,7 @@ export default class AirDropPreferences extends ExtensionPreferences {
             const state = JSON.parse(output);
             const prefs = state.preferences;
             name.text = prefs.receiver_name;
-            duration.selected = [0, 300, 600].indexOf(prefs.duration_seconds);
+            duration.selected = [0, 60, 120, 300, 600].indexOf(prefs.duration_seconds);
             selectedFolder = prefs.download_dir;
             folder.subtitle = selectedFolder;
             save.sensitive = choose.sensitive = name.sensitive = duration.sensitive = true;
@@ -88,7 +88,7 @@ export default class AirDropPreferences extends ExtensionPreferences {
             save.sensitive = false;
             try {
                 await run([CONTROL, 'set-preferences', JSON.stringify({download_dir: selectedFolder,
-                    receiver_name: name.text.trim(), duration_seconds: [0, 300, 600][duration.selected]})], cancellable);
+                    receiver_name: name.text.trim(), duration_seconds: [0, 60, 120, 300, 600][duration.selected]})], cancellable);
                 if (!closed) result.subtitle = 'Uloženo. Použije se při příštím zapnutí příjmu.';
             } catch (error) {showError(error);}
             finally {if (!closed) save.sensitive = true;}

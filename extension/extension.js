@@ -63,7 +63,7 @@ class AirDropIndicator extends PanelMenu.Button {
         this.duration = new PopupMenu.PopupSubMenuMenuItem('Doba příjmu');
         this.menu.addMenuItem(this.duration);
         this.durationChoices = [];
-        for (const seconds of [0, 300, 600]) {
+        for (const seconds of [0, 60, 120, 300, 600]) {
             const item = new PopupMenu.PopupMenuItem(Status.durationLabel(seconds));
             this.duration.menu.addMenuItem(item);
             this.durationChoices.push([seconds, item]);
