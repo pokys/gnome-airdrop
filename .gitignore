@@ -1,0 +1,17 @@
+.build/
+dist/
+__pycache__/
+*.py[cod]
+*.log
+*.pcap
+*.pcapng
+.env
+.env.*
+config.json
+settings.json
+identity/
+received/
+*.key
+*.p12
+*.pfx
+receipt.json

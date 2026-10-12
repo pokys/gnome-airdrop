@@ -1,0 +1,10 @@
+{
+  "uuid": "gnome-airdrop@pokys.github.io",
+  "name": "GNOME AirDrop",
+  "description": "Experimental AirDrop receiver with automatic Wi-Fi recovery.",
+  "shell-version": [
+    "50"
+  ],
+  "version": 1,
+  "url": "https://github.com/pokys/gnome-airdrop"
+}

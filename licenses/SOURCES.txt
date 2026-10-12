@@ -1,0 +1,36 @@
+Radio backend: https://github.com/t4t5/omdrop-owl
+Commit 8c38540267641ba2dcdf16b0ae115ac71f11be94
+OWL: https://github.com/jedbillyb/owl
+Commit 832d70f815c3d4a06a02117bf0fc5e868daa1ff0 + omdrop-owl patches
+AirDrop tools: https://github.com/brentkearney/omdrop-awdl
+Commit 534f91a525337951ca19c311e53d333bd6d55100
+Receiver: https://github.com/brentkearney/omdrop-plugin
+Commit b2f9a537b150c26402c5daad8125fb7e61c214ec
+
+Local changes: private runtime directory, no debugfs mount, station reuse on
+AX211, disable NetworkManager for the temporary IBSS interface, quieter OWL
+logs, indefinite Bluetooth advertisement, bind receiver to AWDL IPv6 only,
+idempotent SIGTERM cleanup and completed-file receipt event.
+
+OWL and its patches: GPL-3.0-or-later; bundled radiotap parser: ISC.
+AirDrop helper tools: GPL-2.0-only. Receiver: MIT (see included license files).
+libarchive-c Python bindings: CC0; the shared libarchive library is provided
+by Fedora, not bundled here. Complete patched OWL source is vendored under vendor/owl/. Receiver and
+helper source is vendored under app/lib/. No prebuilt executable is committed.
+
+Additional integration changes:
+- GNOME Shell UI, preferences, Polkit owner checks, service and recovery guard.
+- User-configurable Downloads destination independent of the source checkout.
+- Precise receive diagnostics and idle-boundary recovery only after bounded
+  compression/ODC archive validation and exact Ask manifest sizes.
+
+app/bin/, extension/, packaging/ and tools/: MIT (top-level LICENSE).
+Python tests adapted from omdrop-plugin: MIT (OMDROP-LICENSE).
+Vendored GoogleTest retains vendor/owl/googletest/LICENSE (BSD-3-Clause).
+libarchive-c source snapshot from Fedora 44 python3-libarchive-c, CC0-1.0:
+https://github.com/Changaco/python-libarchive-c
+The bundled Apple Root CA is public, not a local TLS identity.
+
+Vendored submodule pins:
+radiotap 94984dd829a605a2d7af55241145c159607f3b30
+googletest 703bd9caab50b139428cea1aaff9974ebee5742e
