@@ -2,7 +2,9 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
+import * as Status from './status.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
@@ -52,6 +54,20 @@ class AirDropIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this.toggle);
         this.status = new PopupMenu.PopupMenuItem('Kontroluji stav…', {reactive: false});
         this.menu.addMenuItem(this.status);
+        this.transfer = new PopupMenu.PopupMenuItem('', {reactive: false});
+        this.progress = new PopupMenu.PopupMenuItem('', {reactive: false});
+        this.menu.addMenuItem(this.transfer);
+        this.menu.addMenuItem(this.progress);
+        this.window = new PopupMenu.PopupMenuItem('', {reactive: false});
+        this.menu.addMenuItem(this.window);
+        this.duration = new PopupMenu.PopupSubMenuMenuItem('Doba příjmu');
+        this.menu.addMenuItem(this.duration);
+        this.durationChoices = [];
+        for (const seconds of [0, 300, 600]) {
+            const item = new PopupMenu.PopupMenuItem(Status.durationLabel(seconds));
+            this.duration.menu.addMenuItem(item);
+            this.durationChoices.push([seconds, item]);
+        }
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
             'Během příjmu se běžná Wi-Fi odpojí.', {reactive: false}));
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -68,22 +84,14 @@ export default class GnomeAirDropExtension extends Extension {
         this._enabled = true;
         this._busy = false;
         this._polling = false;
-        this._seenReceipt = undefined;
+        this._seenResult = undefined;
         this._cancellable = new Gio.Cancellable();
         this._indicator = new AirDropIndicator();
         Main.panel.addToStatusArea(this.uuid, this._indicator);
         this._indicator.toggle.connect('toggled', (_item, desired) => this._change(desired));
-        this._indicator.folder.connect('activate', () => {
-            if (!this._downloadDir)
-                return;
-            try {
-                const uri = Gio.File.new_for_path(this._downloadDir).get_uri();
-                Gio.AppInfo.launch_default_for_uri(uri, global.create_app_launch_context(0, -1));
-            } catch (error) {
-                Main.notify('AirDrop', 'Složku se nepodařilo otevřít.');
-                console.error(error);
-            }
-        });
+        this._indicator.folder.connect('activate', () => this._openFolder(this._downloadDir));
+        for (const [seconds, item] of this._indicator.durationChoices)
+            item.connect('activate', () => this._setDuration(seconds));
         this._indicator.preferences.connect('activate', () => this.openPreferences());
         this._timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
             this._refresh();
@@ -136,7 +144,7 @@ export default class GnomeAirDropExtension extends Extension {
             this._indicator.icon.opacity = receiving ? 255 : 120;
             if (!this._busy) {
                 const labels = {
-                    active: 'Příjem zapnutý · GNOME-AirDrop',
+                    active: `Příjem zapnutý · ${state.session?.receiver_name ?? 'GNOME-AirDrop'}`,
                     activating: 'Zapínám příjem…',
                     deactivating: 'Vypínám a obnovuji Wi-Fi…',
                     inactive: 'Příjem vypnutý',
@@ -146,17 +154,20 @@ export default class GnomeAirDropExtension extends Extension {
                     ? (labels[state.state] ?? 'Kontroluji stav…')
                     : 'Backend není nainstalovaný.';
             }
-            const receipt = state.receipt;
-            const receiptId = typeof receipt?.id === 'string' ? receipt.id : null;
-            if (this._seenReceipt !== undefined && receiptId && receiptId !== this._seenReceipt) {
-                const names = Array.isArray(receipt.files)
-                    ? receipt.files.filter(name => typeof name === 'string') : [];
-                if (names.length) {
-                    const body = names.length === 1 ? names[0] : `${names.length} souborů`;
-                    Main.notify('AirDrop: soubor přijat', GLib.markup_escape_text(body, -1));
-                }
-            }
-            this._seenReceipt = receiptId;
+            this._indicator.window.label.text = receiving ? Status.windowText(state.session) : '';
+            this._indicator.window.visible = Boolean(this._indicator.window.label.text);
+            this._indicator.duration.label.text = `Doba příjmu · ${Status.durationLabel(state.preferences?.duration_seconds ?? 0)}`;
+            this._indicator.duration.setSensitive(state.installed && !receiving && !pending && !this._busy);
+            const [title, detail] = Status.transferText(state.transfer);
+            this._indicator.transfer.label.text = title;
+            this._indicator.progress.label.text = detail;
+            this._indicator.transfer.visible = Boolean(title);
+            this._indicator.progress.visible = Boolean(detail);
+            const result = state.transfer?.last_result;
+            const resultId = typeof result?.id === 'string' ? result.id : null;
+            if (this._seenResult !== undefined && resultId && resultId !== this._seenResult)
+                this._notifyResult(result);
+            this._seenResult = resultId;
         } catch (error) {
             if (this._enabled && generation === this._generation && !this._busy) {
                 this._setToggleState(false);
@@ -167,6 +178,59 @@ export default class GnomeAirDropExtension extends Extension {
             if (generation === this._generation)
                 this._polling = false;
         }
+    }
+
+    _openFolder(path) {
+        if (!path) return;
+        try {
+            Gio.AppInfo.launch_default_for_uri(Gio.File.new_for_path(path).get_uri(),
+                global.create_app_launch_context(0, -1));
+        } catch (error) {
+            Main.notify('AirDrop', 'Složku se nepodařilo otevřít.');
+            console.error(error);
+        }
+    }
+
+    async _setDuration(seconds) {
+        if (!this._enabled || this._busy) return;
+        const generation = this._generation;
+        this._busy = true;
+        this._indicator.duration.setSensitive(false);
+        try {
+            await execute([CONTROL, 'set-preferences', JSON.stringify({duration_seconds: seconds})],
+                this._cancellable);
+        } catch (error) {
+            if (this._enabled && generation === this._generation)
+                Main.notify('AirDrop', 'Délku příjmu se nepodařilo uložit.');
+        } finally {
+            if (generation !== this._generation) return;
+            this._busy = false;
+            if (this._enabled) this._refresh();
+        }
+    }
+
+    _notifyResult(result) {
+        if (!['completed', 'error'].includes(result.phase)) return;
+        if (!this._notificationSource) {
+            const source = new MessageTray.Source({title: 'AirDrop', iconName: 'document-send-symbolic'});
+            source.connect('destroy', () => {
+                if (this._notificationSource === source) this._notificationSource = null;
+            });
+            Main.messageTray.add(source);
+            this._notificationSource = source;
+        }
+        const success = result.phase === 'completed';
+        const body = success
+            ? (result.file_count > 1 ? `${result.file_count} souborů` : String(result.filename || 'Soubor přijat'))
+            : Status.errorMessage(result.error);
+        const notification = new MessageTray.Notification({source: this._notificationSource,
+            title: success ? 'AirDrop: soubor přijat' : 'AirDrop: přenos nedokončen',
+            body, useBodyMarkup: false, privacyScope: MessageTray.PrivacyScope.USER});
+        if (success) {
+            const path = result.download_dir ?? this._downloadDir;
+            notification.addAction('Otevřít složku', () => this._openFolder(path));
+        }
+        this._notificationSource.addNotification(notification);
     }
 
     _setToggleState(state) {
@@ -187,6 +251,8 @@ export default class GnomeAirDropExtension extends Extension {
             this._timer = null;
         }
         this._cancellable?.cancel();
+        this._notificationSource?.destroy();
+        this._notificationSource = null;
         this._indicator?.destroy();
         this._indicator = null;
         // The service belongs to the user, not to the Shell process. A Shell

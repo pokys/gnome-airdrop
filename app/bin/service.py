@@ -50,20 +50,33 @@ def recover():
 
 
 def main():
-    if os.geteuid() != 0 or sys.argv[1:] not in (['run'], ['recover']):
+    if os.geteuid() != 0 or sys.argv[1:] not in (['run'], ['recover'], ['ready'], ['expired']):
         raise SystemExit('Run through gnome-airdrop.service')
     if sys.argv[1] == 'recover':
         raise SystemExit(recover())
     config, user = configuration()
-    from settings import download_directory
-    config['download_dir'] = download_directory(config)
+    import session
+    from settings import preferences
+    if sys.argv[1] == 'ready':
+        session.ready()
+        return
+    if sys.argv[1] == 'expired':
+        try:
+            should_stop = session.expired(config['user_data'])
+        except (RuntimeError, TypeError, ValueError):
+            raise SystemExit(2)
+        raise SystemExit(0 if should_stop else 1)
+    prefs = preferences(config)
+    config['download_dir'] = prefs['download_dir']
     data = Path(config['user_data'])
     subprocess.run(['/usr/sbin/runuser', '-u', user.pw_name, '--', '/usr/bin/mkdir', '-p',
                     config['download_dir'], str(data / 'config'), str(data / 'runtime'),
                     str(data / 'identity')], check=True)
+    session.prepare(prefs)
     env = dict(os.environ, SUDO_USER=user.pw_name, SUDO_UID=str(user.pw_uid),
                AIR_DROP_RECEIVED_DIR=config['download_dir'], AIR_DROP_USER_DATA=str(data),
-               AIR_DROP_INTERFACE=config['interface'], PYTHONDONTWRITEBYTECODE='1',
+               AIR_DROP_INTERFACE=config['interface'], AIR_DROP_RECEIVER_NAME=prefs['receiver_name'],
+               PYTHONDONTWRITEBYTECODE='1',
                PATH='/usr/sbin:/usr/bin:/sbin:/bin')
     os.execve('/bin/bash', ['/bin/bash', str(BASE / 'bin/listen.sh'), '--listen'], env)
 

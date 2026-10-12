@@ -40,6 +40,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import contacts  # noqa: E402  -- sibling module, found via the line above
 import debugdump  # noqa: E402
 import identity  # noqa: E402
+from transfer_state import TransferState
+
+TRANSFERS = TransferState(os.environ.get("GNOME_AIRDROP_STATE_FILE"),
+                          os.environ.get("GNOME_AIRDROP_SESSION_FILE"))
 
 # The identity's key is loaded into this process for the life of the window;
 # keep it out of core dumps and away from same-UID ptrace.
@@ -154,6 +158,7 @@ MODEL = validate_model(args.model if args.model is not None else _cfg.get('model
 _outdir = args.outdir if args.outdir is not None else _cfg.get('download_dir', os.path.join(pwd.getpwuid(os.getuid()).pw_dir, 'Downloads'))
 # Resolved once; never chdir -- cwd is process-global and the server is threaded.
 DEST = validate_download_dir(_outdir)
+TRANSFERS.destination = DEST
 MAX_RECEIVE_PERCENT = validate_receive_percent(
     args.max_receive_percent if args.max_receive_percent is not None
     else _cfg.get('max_receive_percent', DEFAULT_MAX_RECEIVE_PERCENT))
@@ -287,10 +292,11 @@ class ReadRateTimeout(socket.timeout):
 class ReadDeadline:
     """Require sustained progress as well as an idle-socket timeout."""
 
-    def __init__(self, upload_id=None):
+    def __init__(self, upload_id=None, progress=None):
         self.started = time.monotonic()
         self.transferred = 0
         self.upload_id = upload_id
+        self.progress = progress
         self.last_progress = self.started
         self.phase = 'body'
         self.chunk_remaining = None
@@ -304,6 +310,8 @@ class ReadDeadline:
                          self.upload_id, self.transferred, elapsed,
                          self.transferred / max(elapsed, 0.001))
             self.last_progress = now
+            if self.progress:
+                self.progress(self.transferred, elapsed)
         allowed = INITIAL_READ_SECONDS + (
             self.transferred / MIN_READ_BYTES_PER_SECOND)
         if time.monotonic() > self.started + allowed:
@@ -775,6 +783,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.rfile.peek(1)
             except TimeoutError:
+                self.transfer_failed('timeout')
                 logging.warning('no Upload within %d s of an accepted Ask; closing the connection',
                                 UPLOAD_WAIT_SECONDS)
                 self.close_connection = True
@@ -782,6 +791,21 @@ class Handler(BaseHTTPRequestHandler):
             self.awaiting_upload = False
             self.request.settimeout(READ_IDLE_TIMEOUT_SECONDS)
         super().handle_one_request()
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            token = getattr(self, '_transfer_token', None)
+            if token:
+                TRANSFERS.finish(token, 'interrupted')
+                self._transfer_token = None
+
+    def transfer_failed(self, error):
+        token = getattr(self, '_transfer_token', None)
+        if token:
+            TRANSFERS.finish(token, error)
+            self._transfer_token = None
 
     def handle_expect_100(self):
         # BaseHTTPRequestHandler would acknowledge an upload before its framing
@@ -838,6 +862,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reject(408, 'request body read timed out')
             return
         except RequestBodyError as e:
+            self.transfer_failed('interrupted')
             self.reject(e.status, str(e))
             return
         logging.debug('buffered bounded %d-byte body for %s', len(body), self.path)
@@ -901,13 +926,22 @@ class Handler(BaseHTTPRequestHandler):
     # what was asked for: that log line is what separates "the sender never
     # uploaded" from "the upload failed on our side".
     def handle_ask(self, body):
+        if not TRANSFERS.accepting():
+            self.reject(503, 'receiving window has expired')
+            return
         write_debug(body, 'receive_ask_request.plist')
         try:
             ask = plistlib.loads(body)
         except Exception as e:
             logging.error('ask: undecodable %d-byte body: %r', len(body), e)
             ask = {}
+        if not isinstance(ask, dict):
+            self.reject(400, 'Ask must be a dictionary')
+            return
         files = ask.get('Files') or []
+        if not isinstance(files, list) or len(files) > MAX_ARCHIVE_MEMBERS or any(not isinstance(f, dict) for f in files):
+            self.reject(400, 'invalid or oversized Ask file list')
+            return
         logging.info('ask from %s (%s): type %s, %d item(s): %s',
                      ask.get('SenderComputerName'), ask.get('SenderModelName'),
                      ','.join(ask.get('TransferType') or {}) or '?', len(files),
@@ -951,12 +985,23 @@ class Handler(BaseHTTPRequestHandler):
         # NEVER open it: in Everyone mode any device in range could otherwise
         # make this machine visit an arbitrary URL. A file the user clicks is
         # the whole interaction we are willing to offer.
-        if 'links' in (ask.get('TransferType') or {}):
+        is_link = 'links' in (ask.get('TransferType') or {})
+        self.transfer_failed('interrupted')
+        first = files[0].get('FileName', '') if files and isinstance(files[0], dict) else ''
+        filename = safe_name(first, 'odkaz' if is_link else 'soubor') if isinstance(first, str) else 'soubor'
+        self._transfer_token = TRANSFERS.begin(filename, min(len(files), MAX_ARCHIVE_MEMBERS))
+        if self._transfer_token is None:
+            self.reject(503, 'receiving window has expired')
+            return
+        stored_links = []
+        if is_link:
+            TRANSFERS.update(self._transfer_token, 'verifying')
             for item in items:
                 if not isinstance(item, str) or not item.startswith(('http://', 'https://')):
                     logging.warning('ask: ignoring non-http item %.80r', item)
                     continue
                 stored = store_link(item, DEST)
+                stored_links.append(stored)
                 logging.info('link stored as %s -> %s', stored, item)
         resp = plistlib.dumps({
             'ReceiverModelName': MODEL,
@@ -965,7 +1010,18 @@ class Handler(BaseHTTPRequestHandler):
             'IsAirDropable': True,
         }, fmt=plistlib.FMT_BINARY)
         write_debug(resp, 'receive_ask_response.plist')
-        self.answer(resp)
+        if is_link:
+            try:
+                if stored_links:
+                    save_receipt(stored_links, self._transfer_token)
+                self.answer(resp)
+                self.wfile.flush()
+            finally:
+                TRANSFERS.finish(self._transfer_token, None if stored_links else 'unsupported_type',
+                    filename=stored_links[0] if stored_links else '', file_count=len(stored_links))
+                self._transfer_token = None
+        else:
+            self.answer(resp)
         # A links Ask is the whole transfer; every other kind is followed by
         # an Upload on this connection.
         if 'links' not in (ask.get('TransferType') or {}):
@@ -981,17 +1037,29 @@ class Handler(BaseHTTPRequestHandler):
             return
         ctype = self.headers.get('Content-Type', '').split(';')[0].strip().lower()
         if ctype != 'application/x-dvzip':
+            self.transfer_failed('unsupported_type')
             self.reject(415, f'unsupported Content-Type {ctype!r}')
             return
         if not UPLOAD_SLOTS.acquire(blocking=False):
+            self.transfer_failed('busy')
             self.reject(503, 'too many uploads in progress')
             return
         tid = safe_name(self.headers.get('TransferID', ''), 'upload')
-        deadline = ReadDeadline(upload_id=tid)
+        token = getattr(self, '_transfer_token', None)
+        if token is None:
+            token = TRANSFERS.begin()
+            self._transfer_token = token
+        if token is None:
+            UPLOAD_SLOTS.release()
+            self.reject(503, 'receiving window has expired')
+            return
+        deadline = ReadDeadline(upload_id=tid, progress=lambda size, elapsed:
+            TRANSFERS.update(token, 'receiving', wire_bytes=size, elapsed=elapsed))
         plan = None
         try:
             receive_budget = ReceiveBudget(DEST, MAX_RECEIVE_PERCENT)
             plan = body_plan(self.headers, receive_budget.byte_limit)
+            TRANSFERS.update(token, 'receiving', total_wire_bytes=plan[1])
             logging.info(
                 'upload %s: %d%% of %d free bytes allows %d bytes',
                 tid, receive_budget.percent, receive_budget.free_bytes,
@@ -1016,6 +1084,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not closing_only:
                         raise
                     wire_bytes = raw.tell()
+                    TRANSFERS.update(token, 'verifying', wire_bytes=wire_bytes)
                     try:
                         verify_complete_archive(raw, DEST, receive_budget.byte_limit,
                             getattr(self, '_expected_upload_files', None),
@@ -1032,33 +1101,47 @@ class Handler(BaseHTTPRequestHandler):
                 raw.seek(0)
                 logging.info('upload %s: %d bytes dvzip (TotalBytes %s)',
                              tid, wire_bytes, self.headers.get('TotalBytes'))
+                TRANSFERS.update(token, 'verifying', wire_bytes=wire_bytes)
                 written = store_upload(raw, DEST, tid, receive_budget)
             logging.info('upload %s: stored %s', tid, ', '.join(written))
             save_receipt(written, tid)
         except socket.timeout as e:
+            self.transfer_failed('timeout')
             # Chunked framing announces no length, so there is none to name.
             expected = plan[1] if plan else None
             self.reject(408, f'upload {tid}: {deadline.stall_report(e, expected)}')
             return
         except (BodyTooLarge, UploadLimitError) as e:
+            self.transfer_failed('limit')
             self.reject(413, str(e))
             return
         except RequestBodyError as e:
+            self.transfer_failed('interrupted')
             self.reject(e.status, str(e))
             return
         except OSError as e:
+            self.transfer_failed('storage')
             self.reject(507, f'storage failed: {e}')
             return
         except Exception as e:
+            self.transfer_failed('invalid_archive')
             self.reject(422, f'upload is not a valid bounded DVZip archive: {e}')
             return
         finally:
             UPLOAD_SLOTS.release()
-        self.send_response(200)
-        self.send_header('Content-Length', '0')
-        if self.close_connection:
-            self.send_header('Connection', 'close')
-        self.end_headers()
+        try:
+            self.send_response(200)
+            self.send_header('Content-Length', '0')
+            if self.close_connection:
+                self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.flush()
+        finally:
+            # Keep graceful expiry from killing the receiver before its final
+            # HTTP acknowledgement has been sent. Stored files remain successful
+            # even if the sender disconnects before reading that acknowledgement.
+            TRANSFERS.finish(token, filename=written[0] if written else '', file_count=len(written))
+            self._transfer_token = None
 
     def log_message(self, fmt, *a):
         logging.info('%s %s', self.client_address[0], fmt % a)
@@ -1269,6 +1352,7 @@ def on_term(signum, frame):
 
 
 signal.signal(signal.SIGTERM, on_term)
+TRANSFERS.idle()
 try:
     server.serve_forever()
 except KeyboardInterrupt:

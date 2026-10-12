@@ -12,6 +12,16 @@ TASK = Path(__file__).resolve().parents[1]
 PACKAGE = TASK / 'app'
 
 
+def wait_transfer(path, phase):
+    import time
+    end = time.monotonic() + 2
+    while True:
+        state = json.loads(path.read_text())
+        if state.get('phase') == phase or time.monotonic() >= end:
+            return state
+        time.sleep(0.005)
+
+
 def module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     value = importlib.util.module_from_spec(spec)
@@ -150,7 +160,9 @@ class ReceiptTests(protocol.ReceiverFixture):
     def setUpClass(cls):
         cls.event_tmp = tempfile.TemporaryDirectory()
         cls.event = Path(cls.event_tmp.name) / 'receipt.json'
-        with patch.dict(os.environ, {'GNOME_AIRDROP_EVENT_FILE': str(cls.event)}):
+        cls.transfer = Path(cls.event_tmp.name) / 'transfer.json'
+        with patch.dict(os.environ, {'GNOME_AIRDROP_EVENT_FILE': str(cls.event),
+                                      'GNOME_AIRDROP_STATE_FILE': str(cls.transfer)}):
             super().setUpClass()
 
     @classmethod
@@ -176,6 +188,10 @@ class ReceiptTests(protocol.ReceiverFixture):
         self.assertEqual((self.out / 'receipt.txt').read_bytes(), b'content')
         self.assertEqual(json.loads(self.event.read_text())['files'], ['receipt.txt'])
         self.assertEqual(json.loads(self.event.read_text())['id'], 'complete')
+        state = wait_transfer(self.transfer, 'completed')
+        self.assertEqual((state['phase'], state['active_transfers']), ('completed', 0))
+        self.assertEqual(state['filename'], 'receipt.txt')
+        self.assertEqual(state['last_result']['download_dir'], str(self.out))
 
     def test_invalid_upload_does_not_publish_receipt(self):
         conn = self.connection()
@@ -184,6 +200,21 @@ class ReceiptTests(protocol.ReceiverFixture):
             {'Content-Type': 'application/x-dvzip', 'TransferID': 'invalid'})
         self.assertGreaterEqual(result[0], 400)
         self.assertFalse(self.event.exists())
+        state = json.loads(self.transfer.read_text())
+        self.assertEqual((state['phase'], state['error'], state['active_transfers']),
+                         ('error', 'invalid_archive', 0))
+
+    def test_link_ask_has_completion_notification_without_an_upload(self):
+        conn = self.connection()
+        answer = self.post(conn, '/Ask', plistlib.dumps({'TransferType':{'links':1},
+            'Items':['https://example.org/article']}, fmt=plistlib.FMT_BINARY))
+        self.assertEqual(answer[0], 200)
+        state = wait_transfer(self.transfer, 'completed')
+        self.assertEqual(state['phase'], 'completed')
+        self.assertEqual(state['active_transfers'], 0)
+        self.assertEqual(state['file_count'], 1)
+        self.assertIn('https://example.org/article', (self.out/state['filename']).read_text())
+        self.assertEqual(json.loads(self.event.read_text())['files'], [state['filename']])
 
     def test_six_megabyte_upload_completes_with_exact_bytes(self):
         data = os.urandom(6 * 1024 * 1024)
@@ -194,6 +225,70 @@ class ReceiptTests(protocol.ReceiverFixture):
         self.assertEqual(result[0], 200)
         self.assertEqual((self.out / 'large.bin').read_bytes(), data)
         self.assertEqual(json.loads(self.event.read_text())['files'], ['large.bin'])
+
+
+class TimedWindowTests(protocol.ReceiverFixture):
+    @classmethod
+    def setUpClass(cls):
+        cls.window_tmp = tempfile.TemporaryDirectory()
+        cls.window_root = Path(cls.window_tmp.name)
+        (cls.window_root/'runtime').mkdir()
+        cls.window = cls.window_root/'session.json'
+        cls.transfer = cls.window_root/'runtime/transfer.json'
+        cls.set_deadline(60)
+        with patch.dict(os.environ, {'GNOME_AIRDROP_SESSION_FILE':str(cls.window),
+                                    'GNOME_AIRDROP_STATE_FILE':str(cls.transfer)}):
+            super().setUpClass()
+
+    @classmethod
+    def set_deadline(cls, offset):
+        import time
+        cls.window.write_text(json.dumps({'ends_monotonic':time.monotonic()+offset}))
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        cls.window_tmp.cleanup()
+
+    def setUp(self): self.set_deadline(60)
+
+    def ask_file(self, conn):
+        return self.post(conn,'/Ask',plistlib.dumps({'TransferType':{'files':1},
+            'Files':[{'FileName':'timed.txt','FileSize':7}]},fmt=plistlib.FMT_BINARY))
+
+    def test_accepted_transfer_finishes_after_deadline_with_exact_progress_total(self):
+        conn=self.connection()
+        self.assertEqual(self.ask_file(conn)[0],200)
+        self.set_deadline(-1)
+        payload=protocol.dvzip([('timed.txt',b'content')])
+        conn.request('POST','/Upload',body=payload,headers={'Content-Type':'application/x-dvzip'})
+        response=conn.getresponse();response.read()
+        self.assertEqual(response.status,200)
+        self.assertEqual((self.out/'timed.txt').read_bytes(),b'content')
+        state=wait_transfer(self.transfer,'completed')
+        self.assertEqual(state['phase'],'completed')
+        self.assertEqual(state['wire_bytes'],len(payload))
+        self.assertEqual(state['total_wire_bytes'],len(payload))
+
+    def test_new_transfer_after_deadline_is_refused(self):
+        self.set_deadline(-1)
+        self.assertEqual(self.ask_file(self.connection())[0],503)
+
+    def test_disconnect_releases_the_grace_period_lock(self):
+        import time
+        import session
+        conn=self.connection()
+        self.assertEqual(self.ask_file(conn)[0],200)
+        self.set_deadline(-1)
+        self.assertFalse(session.expired(self.window_root,self.window))
+        conn.close()
+        end=time.monotonic()+3
+        while time.monotonic()<end:
+            if session.expired(self.window_root,self.window): break
+            time.sleep(0.02)
+        self.assertTrue(session.expired(self.window_root,self.window))
+        state=json.loads(self.transfer.read_text())
+        self.assertEqual(state['last_result']['error'],'interrupted')
 
 
 
@@ -263,7 +358,7 @@ if __name__ == '__main__':
     suite = unittest.TestSuite()
     for case in (AuthorizationTests, FramingDiagnosisTests, CompleteArchiveTests, protocol.ExistingIdentityTests,
                  protocol.FirstStartTests, protocol.ContactsOnlyTests,
-                 protocol.StalledHandshakeTests, ReceiptTests, MissingEndingTests):
+                 protocol.StalledHandshakeTests, ReceiptTests, MissingEndingTests, TimedWindowTests):
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(case))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

@@ -64,4 +64,38 @@ class DestinationTests(unittest.TestCase):
         commands.assert_not_called()
 
 
+class PreferencesTests(unittest.TestCase):
+    setUp = DestinationTests.setUp
+
+    def test_all_preferences_share_one_file_and_preserve_each_other(self):
+        settings.save_preferences(self.config, {'download_dir': str(self.folder),
+            'receiver_name': 'My Laptop', 'duration_seconds': 600})
+        settings.save_preferences(self.config, {'duration_seconds': 300})
+        prefs = settings.preferences(self.config)
+        self.assertEqual(prefs, {'download_dir': str(self.folder), 'receiver_name': 'My Laptop',
+                               'duration_seconds': 300})
+        self.assertEqual(list((self.root/'data').iterdir()), [self.root/'data/settings.json'])
+
+    def test_invalid_values_do_not_replace_saved_preferences(self):
+        settings.save_preferences(self.config, {'download_dir':str(self.folder)})
+        before = (self.root/'data/settings.json').read_bytes()
+        for changes in [{'receiver_name':''}, {'receiver_name':'a'*64},
+                        {'receiver_name':'bad\nname'}, {'receiver_name':'bad/dir'},
+                        {'receiver_name':'a\u202eb'}, {'duration_seconds':True},
+                        {'duration_seconds':301}, {'unknown':'value'}]:
+            with self.assertRaises(ValueError): settings.save_preferences(self.config, changes)
+            self.assertEqual(before,(self.root/'data/settings.json').read_bytes())
+
+    def test_preferences_can_change_during_receiving_without_restarting_service(self):
+        settings.save_preferences(self.config, {'download_dir':str(self.folder)})
+        (self.root/'config.json').write_text(json.dumps(self.config))
+        with patch.object(control,'BASE',self.root), \
+                patch('sys.argv',['control','set-preferences','{"receiver_name":"New Name","duration_seconds":600}']), \
+                patch.object(control.subprocess,'run',return_value=subprocess.CompletedProcess([],0,'active\n')) as commands:
+            control.main()
+        self.assertEqual(settings.preferences(self.config)['receiver_name'],'New Name')
+        self.assertEqual(commands.call_count,1)
+        self.assertNotIn('start',commands.call_args.args[0])
+
+
 if __name__ == '__main__': unittest.main(verbosity=2)

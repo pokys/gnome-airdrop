@@ -16,13 +16,31 @@ and never starts automatically at boot.
 
 Normal Wi-Fi disconnects while receiving. Turning reception off restores the
 previous connection. Keep a backup connection available when testing.
-A notification appears only after a file has been stored successfully.
+The indicator shows file name/count, received archive bytes, average speed and
+verification. Percentages appear only when the HTTP body length is known;
+chunked/compressed iPhone payloads usually have no reliable progress percentage.
+A completion notification includes **Otevřít složku** (Open folder). Failed
+transfers show a short explanation and a suggested next step.
 If the iPhone progress circle stops, allow another 40 seconds before stopping.
 
-Files go to the installing user's XDG Downloads folder. Choose another existing
-folder in **Nastavení…** (Preferences), with reception switched off.
+Files go to the installing user's XDG Downloads folder. Choose another existing folder in **Nastavení…** (Preferences).
+Name, folder and duration changes apply on the next receiving session, so saving
+settings never interrupts an ongoing transfer.
 The service runs separately from GNOME Shell. Disabling the extension does not
 stop a transfer; logging out or losing the active login session does.
+
+Choose **Doba příjmu** (Reception duration) before enabling reception: indefinitely,
+5 minutes or 10 minutes. The default is saved in the same settings file as the
+name and folder. The service starts the countdown after startup. At expiry it
+rejects new transfers and lets previously accepted transfers finish, including
+the existing upload wait/read timeouts; then it restores Wi-Fi. The GNOME Shell
+can restart without losing the timer. A manual stop interrupts immediately.
+
+Preferences also offers **Uložit diagnostiku…** (Save diagnostics). The exported
+JSON is built from an allowlist, not filtered logs: application/system versions,
+known states/error codes and bounded transfer statistics. It omits names, paths,
+addresses, timestamps, IDs, raw errors and runtime identity. It stays local; the
+app never sends reports automatically.
 
 ## Project layout
 
@@ -111,8 +129,10 @@ Removal preserves received files and the source checkout.
 ```
 
 Protocol tests use local IPv6 loopback, temporary identities and temporary files;
-they do not touch Wi-Fi or start the installed service. A 6 MB transfer and the
-complete-archive fallback are covered. Installer tests use temporary paths and fake OS registrations. Graphical
+they do not touch Wi-Fi or start the installed service. A 6 MB transfer, the complete-archive fallback, expired-window TLS uploads,
+activity-lock draining, disconnect cleanup and export privacy are covered.
+Headless GJS checks cover indicator actions, notification deduplication and
+preferences/export behavior. Installer tests use temporary paths and fake OS registrations. Graphical
 preferences still need manual
 verification in GNOME after installation. No radio operation runs during tests.
 
@@ -155,17 +175,17 @@ and manual runs. Dependencies and compilation run inside a disposable Fedora 44
 container on GitHub's runner. No radio operations run in CI. Build artifacts
 are available from the Actions run for 14 days.
 
-Push a version tag such as `v0.1.0` to build, test and publish a GitHub Release:
+Push a version tag such as `v0.2.0` to build, test and publish a GitHub Release:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Successful releases provide:
 
-- `gnome-airdrop-extension-v0.1.0.zip`: GNOME UI only; needs the installed backend.
-- `gnome-airdrop-v0.1.0-fedora44-x86_64.tar.gz`: complete receiver/extension bundle
+- `gnome-airdrop-extension-v0.2.0.zip`: GNOME UI only; needs the installed backend.
+- `gnome-airdrop-v0.2.0-fedora44-x86_64.tar.gz`: complete receiver/extension bundle
   with installer, uninstaller, documentation and component licenses.
 - `SHA256SUMS`: checksums for both downloads.
 
@@ -178,3 +198,11 @@ Only the release job receives write permission, after successful tests, and only
 for version tags pushed to this repository. Pull requests cannot publish releases.
 No personal access token is needed; the workflow uses GitHub's built-in token.
 Build results and download artifacts are available on the repository Actions page.
+
+Before tagging a new version, update `app/VERSION` and increment the GNOME integer
+`version` in `extension/metadata.json`. Packaging derives the extension's
+`version-name` from `app/VERSION`, and release CI rejects mismatching tags.
+
+For an existing installation, switch reception off and uninstall the previous
+bundle before installing this version. The current installer refuses to overwrite
+an existing installation; received files survive removal, settings/identity do not.

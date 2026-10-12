@@ -12,6 +12,8 @@ if ref.startswith('refs/tags/'):
     version = ref.removeprefix('refs/tags/')
     if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?', version):
         raise SystemExit('Release tags must look like v0.1.0 or v0.1.0-beta.1')
+    if version.removeprefix('v') != (root/'app/VERSION').read_text().strip():
+        raise SystemExit('Release tag must match app/VERSION')
 else:
     revision = os.environ.get('BUILD_SHA', '')
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
@@ -39,6 +41,10 @@ for source, name in assets.items():
 - The tar.gz is the complete installer bundle, including receiver, extension
   and uninstaller. Extract it and run `./gnome-airdrop/install.sh`.
 - The extension ZIP contains only the GNOME UI; it requires the matching backend.
+- Transfer progress and outcomes, folder notification actions, timed sessions,
+  configurable receiver name and an allowlisted diagnostic export are included.
+- Graphical behavior and new timed sessions need manual GNOME/iPhone testing;
+  CI verifies protocol, state and timer logic without operating a Wi-Fi radio.
 - Receiving temporarily disconnects normal Wi-Fi. Transfers can be slow or
   require retrying. Hardware behavior is not verified by CI.
 - SHA256SUMS verifies downloaded file contents; it is not a digital signature.

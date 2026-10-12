@@ -140,9 +140,11 @@ if [[ $MODE == --receive || $MODE == --listen ]]; then
   setsid "${PROCESS_LIMIT[@]}" runuser -u "$SUDO_USER" -- env \
     PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH="$TASK_DIR/lib/python" \
     XDG_CONFIG_HOME="$USER_DATA/config" XDG_RUNTIME_DIR="$USER_DATA/runtime" \
+    GNOME_AIRDROP_STATE_FILE="$USER_DATA/runtime/transfer.json" \
+    GNOME_AIRDROP_SESSION_FILE="/run/gnome-airdrop/session.json" \
     GNOME_AIRDROP_EVENT_FILE="$USER_DATA/runtime/receipt.json" \
     python3 -u "$TASK_DIR/lib/receiver/airdrop-serve.py" \
-    --name GNOME-AirDrop --keys "$USER_DATA/identity" \
+    --name "${AIR_DROP_RECEIVER_NAME:-GNOME-AirDrop}" --keys "$USER_DATA/identity" \
     --config "$USER_DATA/config/receiver.toml" --outdir "$RECEIVED_DIR" \
     > "$TASK_DIR/outputs/receiver.log" 2>&1 < /dev/null &
   echo $! > "$STATE/receiver.pid"
@@ -163,12 +165,27 @@ if [[ $MODE == --receive || $MODE == --listen ]]; then
   echo "Prijimac GNOME-AirDrop je spusten. Soubory: $RECEIVED_DIR"
 fi
 if [[ $MODE == --listen ]]; then
+  python3 "$TASK_DIR/bin/service.py" ready
   systemd-notify --ready
   echo 'Prijem zapnuty. Vypnuti pres prepinac v GNOME.'
   # Restarting this independent timer gives the parent 90 seconds to check
   # in again. If it crashes or hangs, the timer restores the original Wi-Fi.
+  health_tick=0
   while true; do
-    sleep 10
+    sleep 2
+    if python3 "$TASK_DIR/bin/service.py" expired; then
+      echo 'Doba prijmu uplynula; prenosy dobehly. Obnovuji Wi-Fi.'
+      exit 0
+    else
+      expired_status=$?
+      if [[ $expired_status != 1 ]]; then
+        echo 'Stav casovace neni dostupny; obnovuji Wi-Fi.'
+        exit 1
+      fi
+    fi
+    health_tick=$((health_tick + 1))
+    if (( health_tick < 5 )); then continue; fi
+    health_tick=0
     # A graphical Shell restart keeps the user active; logout or switching
     # away from this user's active seat ends receiving.
     if [[ $(loginctl show-user "$SUDO_UID" --property=State --value) != active ]]; then
