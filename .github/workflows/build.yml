@@ -25,17 +25,15 @@ jobs:
           persist-credentials: false
       - name: Audit publication sources
         run: ./tools/audit.sh
-      - name: Build and test in disposable Fedora container
-        run: |
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE:/project:rw" -w /project \
-            registry.fedoraproject.org/fedora:44 \
-            /bin/bash ./tools/ci-container.sh
-      - name: Assemble download assets
+      - name: Build, test and package in disposable Fedora container
         env:
           BUILD_REF: ${{ github.ref }}
           BUILD_SHA: ${{ github.sha }}
-        run: python3 tools/release-assets.py
+        run: |
+          docker run --rm --env BUILD_REF --env BUILD_SHA \
+            -v "$GITHUB_WORKSPACE:/project:rw" -w /project \
+            registry.fedoraproject.org/fedora:44 \
+            /bin/bash ./tools/ci-container.sh
       - name: Save downloadable build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

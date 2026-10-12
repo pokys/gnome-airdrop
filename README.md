@@ -177,4 +177,4 @@ The uninstaller is copied to `/opt/gnome-airdrop/uninstall.sh`.
 Only the release job receives write permission, after successful tests, and only
 for version tags pushed to this repository. Pull requests cannot publish releases.
 No personal access token is needed; the workflow uses GitHub's built-in token.
-The workflow has not run remotely until the project is uploaded to GitHub.
+Build results and download artifacts are available on the repository Actions page.

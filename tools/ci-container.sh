@@ -18,3 +18,6 @@ cmake --build .build/owl --target owl -j "$(nproc)"
 python3 tools/package.py
 # Run protocol tests without root. No Wi-Fi operation or installed service is used.
 runuser -u nobody -- /bin/bash ./tools/test.sh
+
+# Generate assets before leaving the container that owns the build output.
+python3 tools/release-assets.py
